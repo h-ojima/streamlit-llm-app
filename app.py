@@ -1,7 +1,7 @@
 from dotenv import load_dotenv
 import streamlit as st
 from langchain_openai import ChatOpenAI
-from langchain.schema import SystemMessage, HumanMessage
+from langchain.schema import SystemMessage, HumanMessage, AIMessage
 
 # シークレットキーの取得
 load_dotenv()
@@ -25,23 +25,25 @@ SYSTEM_MESSAGES = {
 }
 
 
-def get_llm_response(user_input: str, expert_type: str) -> str:
+def get_llm_response(user_input: str, expert_type: str, history: list) -> str:
     """
-    入力テキストと専門家の種類を受け取り、LLMからの回答を返す関数。
+    入力テキストと専門家の種類、会話履歴を受け取り、LLMからの回答を返す関数。
 
     Args:
         user_input: ユーザーが入力したテキスト
         expert_type: ラジオボタンで選択された専門家の種類
+        history: 過去の会話履歴（HumanMessage / AIMessage のリスト）
 
     Returns:
         LLMからの回答文字列
     """
     llm = ChatOpenAI(model_name="gpt-4o-mini", temperature=0)
 
-    messages = [
-        SystemMessage(content=SYSTEM_MESSAGES[expert_type]),
-        HumanMessage(content=user_input),
-    ]
+    messages = (
+        [SystemMessage(content=SYSTEM_MESSAGES[expert_type])]
+        + history
+        + [HumanMessage(content=user_input)]
+    )
 
     result = llm(messages)
     return result.content
@@ -66,6 +68,12 @@ st.markdown(
 
 st.divider()
 
+# --- 会話履歴の初期化 ---
+if "chat_history" not in st.session_state:
+    st.session_state.chat_history = []  # {"role": "user"/"ai", "content": str} のリスト
+if "lc_history" not in st.session_state:
+    st.session_state.lc_history = []    # LangChain用 HumanMessage / AIMessage のリスト
+
 # 専門家の選択（ラジオボタン）
 expert_type = st.radio(
     "相談したい専門家を選択してください",
@@ -80,15 +88,45 @@ user_input = st.text_area(
     height=150,
 )
 
+col1, col2 = st.columns([1, 5])
+
+with col1:
+    send_button = st.button("回答を得る", type="primary")
+
+with col2:
+    if st.button("会話履歴をクリア"):
+        st.session_state.chat_history = []
+        st.session_state.lc_history = []
+        st.rerun()
+
 # 送信ボタン
-if st.button("回答を得る", type="primary"):
+if send_button:
     if not user_input.strip():
         st.error("⚠️ 質問が入力されていません。テキストを入力してから送信してください。")
     else:
         try:
             with st.spinner("回答を生成中..."):
-                response = get_llm_response(user_input, expert_type)
-            st.subheader(f"💬 {expert_type}専門家からの回答")
-            st.markdown(response)
+                response = get_llm_response(
+                    user_input, expert_type, st.session_state.lc_history
+                )
+
+            # 会話履歴に追加
+            st.session_state.chat_history.append({"role": "user", "content": user_input})
+            st.session_state.chat_history.append({"role": "ai", "content": response})
+            st.session_state.lc_history.append(HumanMessage(content=user_input))
+            st.session_state.lc_history.append(AIMessage(content=response))
+
         except Exception as e:
             st.error(f"⚠️ 回答の生成中にエラーが発生しました。しばらく待ってから再度お試しください。\n\n（エラー詳細: {e}）")
+
+# --- 会話履歴の表示 ---
+if st.session_state.chat_history:
+    st.divider()
+    st.subheader("💬 会話履歴")
+    for message in st.session_state.chat_history:
+        if message["role"] == "user":
+            with st.chat_message("user"):
+                st.markdown(message["content"])
+        else:
+            with st.chat_message("assistant"):
+                st.markdown(message["content"])
